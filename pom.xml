@@ -26,7 +26,7 @@
   </parent>
 
   <groupId>org.apache.beam.samples</groupId>
-  <artifactId>kafka-to-bigquery</artifactId>
+  <artifactId>kafkaio-from-dekaf</artifactId>
   <version>1.0</version>
 
   <properties>

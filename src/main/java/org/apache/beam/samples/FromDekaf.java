@@ -1,13 +1,10 @@
-// run like mvn -e compile exec:java -Dexec.mainClass=org.apache.beam.samples.KafkaToBigQuery -Dexec.args="--inputTopic=hello_world"
+// mvn -e compile exec:java -Dexec.mainClass=org.apache.beam.samples.FromDekaf -Pdirect-runner -Dexec.args="--inputTopic=hello_world"
 
 package org.apache.beam.samples;
 
 import com.google.gson.Gson;
 import java.util.Map;
-import java.util.Objects;
 import org.apache.beam.sdk.Pipeline;
-import org.apache.beam.sdk.coders.AvroCoder;
-import org.apache.beam.sdk.coders.DefaultCoder;
 import org.apache.beam.sdk.io.kafka.KafkaIO;
 import org.apache.beam.sdk.options.Default;
 import org.apache.beam.sdk.options.Description;
@@ -16,7 +13,6 @@ import org.apache.beam.sdk.options.StreamingOptions;
 import org.apache.beam.sdk.options.Validation;
 import org.apache.beam.sdk.transforms.MapElements;
 import org.apache.beam.sdk.transforms.Values;
-import org.apache.beam.sdk.transforms.WithTimestamps;
 import org.apache.beam.sdk.transforms.PTransform;
 import org.apache.beam.sdk.transforms.ParDo;
 import org.apache.beam.sdk.transforms.DoFn;
@@ -30,7 +26,6 @@ import org.apache.beam.sdk.values.KV;
 import org.apache.beam.sdk.values.PCollection;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.joda.time.Duration;
-import org.joda.time.Instant;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -49,73 +44,7 @@ public class FromDekaf {
     }
   }
 
-  @DefaultCoder(AvroCoder.class)
-  static class GameActionInfo {
-    String User;
-    String Team;
-    Integer Score;
-    String FinishedAt;
-
-    public GameActionInfo() {
-    }
-
-    public String getUser() {
-      return this.User;
-    }
-
-    public String getTeam() {
-      return this.Team;
-    }
-
-    public Integer getScore() {
-      return this.Score;
-    }
-
-    public String getTimestamp() {
-      return this.FinishedAt;
-    }
-
-    public String getKey(String keyname) {
-      if ("team".equals(keyname)) {
-        return this.Team;
-      } else { // return username as default
-        return this.User;
-      }
-    }
-
-    @Override
-    public boolean equals(Object o) {
-      if (this == o) {
-        return true;
-      }
-      if (o == null || o.getClass() != this.getClass()) {
-        return false;
-      }
-
-      GameActionInfo gameActionInfo = (GameActionInfo) o;
-
-      if (!this.getUser().equals(gameActionInfo.getUser())) {
-        return false;
-      }
-
-      if (!this.getTeam().equals(gameActionInfo.getTeam())) {
-        return false;
-      }
-
-      if (!this.getScore().equals(gameActionInfo.getScore())) {
-        return false;
-      }
-
-      return this.getTimestamp().equals(gameActionInfo.getTimestamp());
-    }
-
-    @Override
-    public int hashCode() {
-      return Objects.hash(User, Team, Score, FinishedAt);
-    }
-  }
-
-  public static class ExtractAndSumScore
+  static class ExtractAndSumScore
       extends PTransform<PCollection<GameActionInfo>, PCollection<KV<String, Integer>>> {
 
     private final String field;
@@ -126,7 +55,6 @@ public class FromDekaf {
 
     @Override
     public PCollection<KV<String, Integer>> expand(PCollection<GameActionInfo> gameInfo) {
-
       return gameInfo
           .apply(
               MapElements.into(
@@ -174,7 +102,7 @@ public class FromDekaf {
     void setInputTopic(String value);
 
     @Description("Apache Kafka bootstrap servers in the form 'hostname:port'.")
-    @Default.String("localhost:9091")
+    @Default.String("localhost:9092")
     String getBootstrapServer();
 
     void setBootstrapServer(String value);
@@ -201,29 +129,56 @@ public class FromDekaf {
     PCollection<GameActionInfo> gameEvents = pipeline
         .apply("Read messages from Kafka",
             KafkaIO.<String, String>read()
+                // Standard configurations.
                 .withBootstrapServers(options.getBootstrapServer())
                 .withTopic(options.getInputTopic())
                 .withKeyDeserializer(StringDeserializer.class)
                 .withValueDeserializer(StringDeserializer.class)
 
-                // Figure out how to set the timestamp type, probably something in the
-                // protocol..?
-                // .withLogAppendTime()
+                // This sets the event times and watermarks for messages based on the
+                // server-reported "LogAppendTime". Otherwise, the processing time is used.
+                // There are other options for this behavior as well. The server must specify
+                // the timestamp is LogAppendTime for this to work, see
+                // https://github.com/estuary/dekaf/pull/1 for the emulator side.
+                .withLogAppendTime()
 
-                // The broker does not support LIST_OFFSETS with version in range [2,7]. The
-                // supported range is [0,1].
+                // This is for "exactly once" type of semantics added with Kafka 0.11. Currently
+                // not supported by Dekaf.
                 // .withReadCommitted()
 
-                .withConsumerConfigUpdates(Map.of("auto.offset.reset", "earliest"))
-                // .commitOffsetsInFinalize()
+                // commitOffsetsInFinalize() is like AUTO_COMMIT in that it allows for the
+                // client to store commit reading progress on the server. It does not provide
+                // any hard processing guarantees. Causes the client to send OffsetCommit
+                // requests, which are currently a noop in Dekaf.
+                .commitOffsetsInFinalize()
 
+                // withConsumerConfigUpdates updates the consumer with configuration options.
+                // There are many options - group.id must be set in order to use
+                // commitOffsetsInFinalize.
+                .withConsumerConfigUpdates(Map.of("group.id", "some-group"))
+
+                // Drops the kafka metadata for processing.
                 .withoutMetadata())
-        .apply("Get message contents", Values.<String>create())
-        .apply("ParseGameEvent", ParDo.of(new ParseEventFn()))
-        .apply("Add processing time", WithTimestamps
-            .of((gameInfo) -> new Instant(gameInfo.getTimestamp())));
 
-    // Calculate scores
+        // Other interesting configs/todos:
+
+        // withStartReadTime & withStartReadTime - Only read events with timestamps in a
+        // certain window. Presumably the Emulator would need to be able to handle
+        // offset requests other than -1 and -2 that would represent an actual time in
+        // order for this to work.
+
+        // Just gets the message as a JSON string.
+        .apply("Get message contents", Values.<String>create())
+
+        // Unmarshal the string data into a GameActionInfo.
+        .apply("ParseGameEvent", ParDo.of(new ParseEventFn()));
+
+    // Calculate aggregate scores in windowed batches:
+    // - New messages are read as they are available from the server.
+    // - Windows of time are started to contain sets of messages.
+    // - The aggregation logic sums the scores for each "team" continuously.
+    // - Once the window duration amount of time has elapsed, the window is output
+    // and can be handled further by the pipeline.
     PCollection<KV<String, Integer>> teamScores = gameEvents
         .apply(
             "CalculateTeamScores",
@@ -231,7 +186,7 @@ public class FromDekaf {
                 Duration.standardMinutes(options.getTeamWindowDuration()),
                 Duration.standardMinutes(options.getAllowedLateness())));
 
-    // Log messages
+    // Just log the messages in this simple example.
     teamScores
         .apply("Log messages", MapElements.into(TypeDescriptors.strings())
             .via(ts -> {
