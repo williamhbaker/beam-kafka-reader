@@ -154,7 +154,8 @@ public class FromDekaf {
 
                 // withConsumerConfigUpdates updates the consumer with configuration options.
                 // There are many options - group.id must be set in order to use
-                // commitOffsetsInFinalize.
+                // commitOffsetsInFinalize. auto.offset.reset=earliest is also interesting for
+                // starting to read messages at the beginning, doing a "backfill".
                 .withConsumerConfigUpdates(Map.of("group.id", "some-group"))
 
                 // Drops the kafka metadata for processing.
