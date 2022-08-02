@@ -6,6 +6,7 @@ import com.google.gson.Gson;
 import java.util.Map;
 import org.apache.beam.sdk.Pipeline;
 import org.apache.beam.sdk.io.kafka.KafkaIO;
+import org.apache.beam.sdk.io.TextIO;
 import org.apache.beam.sdk.options.Default;
 import org.apache.beam.sdk.options.Description;
 import org.apache.beam.sdk.options.PipelineOptionsFactory;
@@ -183,17 +184,16 @@ public class FromDekaf {
     PCollection<KV<String, Integer>> teamScores = gameEvents
         .apply(
             "CalculateTeamScores",
-            new CalculateTeamScores(
-                Duration.standardMinutes(options.getTeamWindowDuration()),
-                Duration.standardMinutes(options.getAllowedLateness())));
+            new CalculateTeamScores(FIVE_SECONDS, TEN_SECONDS));
 
-    // Just log the messages in this simple example.
+    // Log windows and save them to files.
     teamScores
-        .apply("Log messages", MapElements.into(TypeDescriptors.strings())
+        .apply("LogCounts", MapElements.into(TypeDescriptors.strings())
             .via(ts -> {
               LOG.info("****** team: {} score: {}", ts.getKey(), ts.getValue());
-              return ts.getKey();
-            }));
+              return String.format("%s: %s", ts.getKey(), ts.getValue());
+            }))
+        .apply(new WriteOneFilePerWindow(".gen-data/", 1));
 
     pipeline.run();
   }
