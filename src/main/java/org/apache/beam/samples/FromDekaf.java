@@ -1,4 +1,16 @@
-// mvn -e compile exec:java -Dexec.mainClass=org.apache.beam.samples.FromDekaf -Pdirect-runner -Dexec.args="--inputTopic=hello_world"
+// mvn -e compile exec:java -Dexec.mainClass=org.apache.beam.samples.FromDekaf -Pdirect-runner -Dexec.args="--inputTopic=hello_world --output=. --bootstrapServer=localhost:9092"
+
+/*
+mvn -Pdataflow-runner compile exec:java \
+    -Dexec.mainClass=org.apache.beam.samples.FromDekaf \
+    -Dexec.args="--project=dataflow-358213 \
+    --bootstrapServer=6.tcp.ngrok.io:13260 \
+    --runner=DataflowRunner \
+    --inputTopic=hello_world \
+    --output=gs://dekaf_bucket/output \
+    --gcpTempLocation=gs://dekaf_bucket/temp/ \
+    --region=us-central1"
+*/
 
 package org.apache.beam.samples;
 
@@ -6,7 +18,6 @@ import com.google.gson.Gson;
 import java.util.Map;
 import org.apache.beam.sdk.Pipeline;
 import org.apache.beam.sdk.io.kafka.KafkaIO;
-import org.apache.beam.sdk.io.TextIO;
 import org.apache.beam.sdk.options.Default;
 import org.apache.beam.sdk.options.Description;
 import org.apache.beam.sdk.options.PipelineOptionsFactory;
@@ -119,6 +130,12 @@ public class FromDekaf {
     Integer getAllowedLateness();
 
     void setAllowedLateness(Integer value);
+
+    @Description("Path of the file to write to")
+    @Validation.Required
+    String getOutput();
+
+    void setOutput(String value);
   }
 
   public static void main(final String[] args) {
@@ -164,7 +181,7 @@ public class FromDekaf {
 
         // Other interesting configs/todos:
 
-        // withStartReadTime & withStartReadTime - Only read events with timestamps in a
+        // withStartReadTime & withStopReadTime - Only read events with timestamps in a
         // certain window. Presumably the Emulator would need to be able to handle
         // offset requests other than -1 and -2 that would represent an actual time in
         // order for this to work.
@@ -193,7 +210,7 @@ public class FromDekaf {
               LOG.info("****** team: {} score: {}", ts.getKey(), ts.getValue());
               return String.format("%s: %s", ts.getKey(), ts.getValue());
             }))
-        .apply(new WriteOneFilePerWindow(".gen-data/", 1));
+        .apply(new WriteOneFilePerWindow(options.getOutput() + "/.gen-data/", 1));
 
     pipeline.run();
   }
